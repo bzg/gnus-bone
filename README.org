@@ -16,7 +16,9 @@ open [[https://codeberg.org/bzg/bone][BONE]] report. It reads the same =reports.
   automatically; until then, see /Installation/ below.
 - =~/.config/gnaw/config.edn= (an EDN map with =:my-addresses= and
   =:sources= keys, shared with gnaw)
-- =gnus-gnaw= supports =reports.json= bone-format =0.9.3=.
+
+Report parsing is done by [[https://codeberg.org/bzg/gnaw.el][gnaw.el]]; see its requirements for the
+supported =reports.json= bone-format.
 
 * Installation
 
@@ -46,21 +48,22 @@ it references are available.
 
 * Commands
 
-- =M-x gnus-gnaw= — Apply overlays to the current summary buffer.
-- =M-x gnus-gnaw-highlight= — Highlight without limiting the summary.
-- =M-x gnus-gnaw-topic= — Filter reports by selected topic.
-- =M-x gnus-gnaw-clear= — Remove all =gnus-gnaw= overlays.
+- =M-x gnus-gnaw= -- Apply overlays to the current summary buffer.
+- =M-x gnus-gnaw-highlight= -- Highlight without limiting the summary.
+- =M-x gnus-gnaw-topic= -- Filter reports by selected topic.
+- =M-x gnus-gnaw-clear= -- Remove all =gnus-gnaw= overlays.
 
 ** Local marks
 
 The following commands toggle gnaw's local marks (stored in
-=~/.config/gnaw/state.edn= and shared with the [[https://codeberg.org/bzg/gnaw][gnaw]] CLI).
+=~/.config/gnaw/state.edn= and shared with the [[https://codeberg.org/bzg/gnaw][gnaw]] CLI, =M-x gnaw= and
+the other mail front-ends).
 
-- =M-x gnus-gnaw-mark-sticky= — toggle the sticky mark (keep the report visible).
-- =M-x gnus-gnaw-mark-skip= — toggle the skip mark (hide the report).
+- =M-x gnus-gnaw-mark-sticky= -- toggle the sticky mark (keep the report visible).
+- =M-x gnus-gnaw-mark-dismiss= -- toggle the dismiss mark (hide the report).
 
-The annotation gains a leading mark column: =*= for sticky, =_= for
-skip, space otherwise.
+The annotation gains a leading mark column: =*= for sticky, =d= for
+dismiss, space otherwise.
 
 * Contributing
 

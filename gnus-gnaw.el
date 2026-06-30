@@ -7,7 +7,7 @@
 ;; Keywords: news, mail
 ;; URL: https://codeberg.org/bzg/gnus-gnaw
 ;; Version: 0.13.0
-;; Package-Requires: ((emacs "28.1") (gnaw "0.1"))
+;; Package-Requires: ((emacs "28.1") (gnaw "0.2"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -38,10 +38,10 @@
 ;; The following commands toggle gnaw's local marks (kept in
 ;; ~/.config/gnaw/state.edn so they are shared with the gnaw CLI):
 ;;
-;; M-x gnus-gnaw-mark-sticky RET — toggle the sticky mark (keep visible)
-;; M-x gnus-gnaw-mark-skip RET — toggle the skip mark (hide)
+;; M-x gnus-gnaw-mark-sticky RET -- toggle the sticky mark (keep visible)
+;; M-x gnus-gnaw-mark-dismiss RET -- toggle the dismiss mark (hide)
 ;;
-;; The annotation gains a leading mark column: '*' = sticky, '_' = skip.
+;; The annotation gains a leading mark column: '*' = sticky, 'd' = dismiss.
 ;;
 ;; gnus-gnaw builds on the `gnaw' library for the shared data layer
 ;; (configuration, report sources, cache and state.edn); this file only
@@ -50,9 +50,6 @@
 ;;; Code:
 
 (require 'gnaw)
-(require 'cl-lib)
-(require 'subr-x)
-(require 'time-date)
 
 (declare-function gnus-summary-article-number "gnus-sum")
 (declare-function gnus-summary-article-header "gnus-sum")
@@ -75,70 +72,20 @@
   "Face for right-margin annotations."
   :group 'gnus-gnaw)
 
-;;; Annotation rendering
-
-(defun gnus-gnaw--mark-prefix (entry)
-  "Get mark char for state ENTRY."
-  (let ((flag (cdr (assq :flag entry)))
-        (skip (cdr (assq :skip-since entry))))
-    (cond
-     ((eq flag :sticky) "*")
-     (skip            "_")
-     (t               " "))))
-
-(defvar gnus-gnaw-votes-width 7
-  "Fixed width for votes column.")
-
-(defvar gnus-gnaw-deadline-width 5
-  "Fixed width for deadline column.")
-
-(defun gnus-gnaw--type-letter (type)
-  "Get letter abbreviation for TYPE."
-  (pcase type
-    ("bug"          "B")
-    ("patch"        "P")
-    ("request"      "?")
-    ("announcement" "A")
-    ("release"      "R")
-    ("change"       "C")
-    (_              "·")))
-
-(defun gnus-gnaw--deadline-days (deadline)
-  "Days until YYYY-MM-DD DEADLINE."
-  (when deadline
-    (let* ((dl (date-to-time (concat deadline " 00:00:00")))
-           (diff (float-time (time-subtract dl (current-time)))))
-      (ceiling (/ diff 86400.0)))))
-
-(defun gnus-gnaw--annotation (info &optional entry)
-  "Build annotation string for report INFO and state ENTRY."
-  (let* ((mark     (gnus-gnaw--mark-prefix entry))
-         (type     (gnus-gnaw--type-letter (plist-get info :type)))
-         (flags    (plist-get info :flags))
-         (priority (plist-get info :priority))
-         (votes    (plist-get info :votes))
-         (deadline (plist-get info :deadline))
-         (days     (gnus-gnaw--deadline-days deadline))
-         (pri-str  (pcase priority (3 "A") (2 "B") (1 "C") (_ " ")))
-         (dl-str   (if days (format "D%+d" days) ""))
-         (dl-pad   (string-pad dl-str gnus-gnaw-deadline-width))
-         (votes-str (if votes (format "[%s]" votes) ""))
-         (votes-pad (string-pad votes-str gnus-gnaw-votes-width))
-         (tag       (concat mark " " type " " flags " " pri-str " "
-                             dl-pad votes-pad)))
-    tag))
-
 ;;; Summary overlays
 
 (defun gnus-gnaw--for-each-summary-mid (fn)
-  "Map FN over article numbers and MIDs in summary buffer."
+  "Map FN over article numbers and normalized MIDs in summary buffer.
+The MID passed to FN is normalized with `gnaw-normalize-mid', matching the
+keys gnaw uses for both reports and state."
   (save-excursion
     (goto-char (point-min))
     (while (not (eobp))
       (let* ((article (gnus-summary-article-number))
              (header  (and (numberp article) (> article 0)
                            (gnus-summary-article-header article)))
-             (mid     (and header (mail-header-id header))))
+             (raw     (and header (mail-header-id header)))
+             (mid     (and raw (gnaw-normalize-mid raw))))
         (when mid (funcall fn article mid)))
       (forward-line 1))))
 
@@ -164,7 +111,7 @@ Use VALUE-FN to compute each value when given, else the report info."
            (let* ((entry   (cdr (assoc mid state)))
                   (bol     (line-beginning-position))
                   (eol     (line-end-position))
-                  (ann-str (gnus-gnaw--annotation info entry))
+                  (ann-str (gnaw-annotation info entry))
                   (ann-len (length ann-str))
                   (p3      (= 3 (plist-get info :priority)))
                   (face    (if p3 '(gnus-gnaw-face bold) 'gnus-gnaw-face))
@@ -238,32 +185,18 @@ Use VALUE-FN to compute each value when given, else the report info."
           (gnus-gnaw--activate reports articles)
           (message "Limited to %d BONE reports." (length articles)))))))
 
-(defun gnus-gnaw--collect-topics (reports)
-  "Sorted list of topics in REPORTS."
-  (let ((topics nil))
-    (dolist (r reports)
-      (let ((topic (plist-get (cdr r) :topic)))
-        (when topic
-          (cl-pushnew topic topics :test #'equal))))
-    (sort (copy-sequence topics) #'string<)))
-
-(defun gnus-gnaw--filter-by-topic (reports topic)
-  "Return REPORTS matching TOPIC."
-  (cl-remove-if-not (lambda (r) (equal (plist-get (cdr r) :topic) topic))
-                    reports))
-
 (defun gnus-gnaw-topic ()
   "Limit summary to reports of selected topic and highlight them."
   (interactive)
   (let* ((reports (gnaw-reports))
-         (topics  (gnus-gnaw--collect-topics reports)))
+         (topics  (gnaw-topics reports)))
     (cond
      ((null reports) (message "No open BONE reports found."))
      ((null topics)  (message "No topics in any report."))
      (t
       (let* ((topic    (completing-read "BONE topic: " topics nil t))
              (filtered (and (not (string= topic ""))
-                            (gnus-gnaw--filter-by-topic reports topic))))
+                            (gnaw-filter-by-topic reports topic))))
         (cond
          ((or (string= topic "") (null filtered))
           (message "No reports for topic \"%s\"." topic))
@@ -314,10 +247,10 @@ Use VALUE-FN to compute each value when given, else the report info."
   (interactive)
   (gnus-gnaw--mark :sticky "Marked sticky" "Unmarked sticky"))
 
-(defun gnus-gnaw-mark-skip ()
-  "Toggle the skip mark (hide) for the current report."
+(defun gnus-gnaw-mark-dismiss ()
+  "Toggle the dismiss mark (hide) for the current report."
   (interactive)
-  (gnus-gnaw--mark :skip "Skipped" "Unskipped"))
+  (gnus-gnaw--mark :dismiss "Dismissed" "Undismissed"))
 
 (defun gnus-gnaw-clear ()
   "Remove all gnus-gnaw overlays."
