@@ -62,7 +62,7 @@ the other mail front-ends).
 - =M-x gnus-gnaw-mark-sticky= -- toggle the sticky mark (keep the report visible).
 - =M-x gnus-gnaw-mark-dismiss= -- toggle the dismiss mark (hide the report).
 
-The annotation gains a leading mark column: =*= for sticky, =d= for
+The annotation gains a leading mark column: =!= for sticky, =d= for
 dismiss, space otherwise.
 
 * Contributing

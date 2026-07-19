@@ -7,7 +7,7 @@
 ;; Keywords: news, mail
 ;; URL: https://codeberg.org/bzg/gnus-gnaw
 ;; Version: 0.13.0
-;; Package-Requires: ((emacs "28.1") (gnaw "0.2"))
+;; Package-Requires: ((emacs "28.1") (gnaw "0.3"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -41,7 +41,7 @@
 ;; M-x gnus-gnaw-mark-sticky RET -- toggle the sticky mark (keep visible)
 ;; M-x gnus-gnaw-mark-dismiss RET -- toggle the dismiss mark (hide)
 ;;
-;; The annotation gains a leading mark column: '*' = sticky, 'd' = dismiss.
+;; The annotation gains a leading mark column: '!' = sticky, 'd' = dismiss.
 ;;
 ;; gnus-gnaw builds on the `gnaw' library for the shared data layer
 ;; (configuration, report sources, cache and state.edn); this file only
@@ -89,14 +89,11 @@ keys gnaw uses for both reports and state."
         (when mid (funcall fn article mid)))
       (forward-line 1))))
 
-(defun gnus-gnaw--build-mid-map (reports &optional value-fn)
-  "Build a hash of normalized MIDs to report info for REPORTS.
-Use VALUE-FN to compute each value when given, else the report info."
+(defun gnus-gnaw--build-mid-map (reports)
+  "Build a hash of normalized MIDs to report info for REPORTS."
   (let ((id-map (make-hash-table :test 'equal)))
     (dolist (r reports)
-      (puthash (car r)
-               (if value-fn (funcall value-fn r) (cdr r))
-               id-map))
+      (puthash (car r) (cdr r) id-map))
     id-map))
 
 (defun gnus-gnaw--apply-overlays (reports)
@@ -113,8 +110,9 @@ Use VALUE-FN to compute each value when given, else the report info."
                   (eol     (line-end-position))
                   (ann-str (gnaw-annotation info entry))
                   (ann-len (length ann-str))
-                  (p3      (= 3 (plist-get info :priority)))
-                  (face    (if p3 '(gnus-gnaw-face bold) 'gnus-gnaw-face))
+                  (top     (equal "A" (gnaw-priority-letter
+                                       (plist-get info :priority))))
+                  (face    (if top '(gnus-gnaw-face bold) 'gnus-gnaw-face))
                   (ov-bg   (make-overlay bol eol))
                   (tag-len (+ ann-len 1))
                   (start   (max bol (- eol tag-len)))
@@ -128,6 +126,9 @@ Use VALUE-FN to compute each value when given, else the report info."
 
 (defvar-local gnus-gnaw--active-reports nil
   "Buffer-local cache of BONE reports for auto-rehighlighting.")
+
+(defvar-local gnus-gnaw--active-topic nil
+  "Topic filtering the buffer's reports, or nil for all reports.")
 
 (defun gnus-gnaw--rehighlight (&rest _args)
   "Re-apply overlays on summary buffer updates."
@@ -144,19 +145,24 @@ Use VALUE-FN to compute each value when given, else the report info."
   (remove-hook 'gnus-summary-prepared-hook #'gnus-gnaw--rehighlight t)
   (remove-hook 'gnus-summary-update-hook #'gnus-gnaw--rehighlight t))
 
-(defun gnus-gnaw--activate (reports &optional limit-articles)
-  "Activate REPORTS, optionally limiting summary to LIMIT-ARTICLES first."
+(defun gnus-gnaw--activate (reports &optional limit-articles topic)
+  "Activate REPORTS, optionally limiting summary to LIMIT-ARTICLES first.
+TOPIC records the topic filter producing REPORTS, if any."
   (when limit-articles (gnus-summary-limit limit-articles))
   (gnus-gnaw-clear)
-  (setq gnus-gnaw--active-reports reports)
+  (setq gnus-gnaw--active-reports reports
+        gnus-gnaw--active-topic topic)
   (gnus-gnaw--apply-overlays reports)
   (gnus-gnaw--enable-hooks))
 
 ;;; Commands
 
+;;;###autoload
 (defun gnus-gnaw-highlight ()
   "Highlight summary lines of open BONE reports."
   (interactive)
+  (unless (derived-mode-p 'gnus-summary-mode)
+    (user-error "Not in a Gnus summary buffer"))
   (let ((reports (gnaw-reports)))
     (if (null reports)
         (message "No open BONE reports found.")
@@ -165,7 +171,7 @@ Use VALUE-FN to compute each value when given, else the report info."
 
 (defun gnus-gnaw--matching-articles (reports)
   "Get article numbers matching REPORTS."
-  (let ((id-map (gnus-gnaw--build-mid-map reports (lambda (_) t)))
+  (let ((id-map (gnus-gnaw--build-mid-map reports))
         (articles nil))
     (gnus-gnaw--for-each-summary-mid
      (lambda (article mid)
@@ -173,9 +179,12 @@ Use VALUE-FN to compute each value when given, else the report info."
          (push article articles))))
     (nreverse articles)))
 
+;;;###autoload
 (defun gnus-gnaw ()
   "Limit summary to open BONE reports and highlight them."
   (interactive)
+  (unless (derived-mode-p 'gnus-summary-mode)
+    (user-error "Not in a Gnus summary buffer"))
   (let ((reports (gnaw-reports)))
     (if (null reports)
         (message "No open BONE reports found.")
@@ -185,9 +194,12 @@ Use VALUE-FN to compute each value when given, else the report info."
           (gnus-gnaw--activate reports articles)
           (message "Limited to %d BONE reports." (length articles)))))))
 
+;;;###autoload
 (defun gnus-gnaw-topic ()
   "Limit summary to reports of selected topic and highlight them."
   (interactive)
+  (unless (derived-mode-p 'gnus-summary-mode)
+    (user-error "Not in a Gnus summary buffer"))
   (let* ((reports (gnaw-reports))
          (topics  (gnaw-topics reports)))
     (cond
@@ -204,7 +216,7 @@ Use VALUE-FN to compute each value when given, else the report info."
           (let ((articles (gnus-gnaw--matching-articles filtered)))
             (if (null articles)
                 (message "No matching articles for topic \"%s\"." topic)
-              (gnus-gnaw--activate filtered articles)
+              (gnus-gnaw--activate filtered articles topic)
               (message "Limited to %d BONE reports for topic \"%s\"."
                        (length articles) topic))))))))))
 
@@ -223,11 +235,6 @@ Use VALUE-FN to compute each value when given, else the report info."
   "Return info plist for MID in REPORTS."
   (cdr (assoc mid reports)))
 
-(defun gnus-gnaw--refresh-overlays ()
-  "Re-apply overlays in summary buffer."
-  (when gnus-gnaw--active-reports
-    (gnus-gnaw--apply-overlays gnus-gnaw--active-reports)))
-
 (defun gnus-gnaw--mark (action on-msg off-msg)
   "Toggle ACTION mark on the current report, showing ON-MSG or OFF-MSG."
   (let* ((reports (or gnus-gnaw--active-reports (gnaw-reports)))
@@ -239,37 +246,45 @@ Use VALUE-FN to compute each value when given, else the report info."
      ((null info)    (user-error "Current article is not a BONE report: %s" mid))
      (t
       (let ((on (gnaw-toggle-mark mid info action)))
-        (gnus-gnaw--refresh-overlays)
+        (gnus-gnaw--rehighlight)
         (message "%s" (if on on-msg off-msg)))))))
 
+;;;###autoload
 (defun gnus-gnaw-mark-sticky ()
   "Toggle the sticky mark (keep visible) for the current report."
   (interactive)
   (gnus-gnaw--mark :sticky "Marked sticky" "Unmarked sticky"))
 
+;;;###autoload
 (defun gnus-gnaw-mark-dismiss ()
   "Toggle the dismiss mark (hide) for the current report."
   (interactive)
   (gnus-gnaw--mark :dismiss "Dismissed" "Undismissed"))
 
+;;;###autoload
 (defun gnus-gnaw-clear ()
   "Remove all gnus-gnaw overlays."
   (interactive)
   (remove-overlays (point-min) (point-max) 'gnus-gnaw t)
-  (setq gnus-gnaw--active-reports nil)
+  (setq gnus-gnaw--active-reports nil
+        gnus-gnaw--active-topic nil)
   (gnus-gnaw--disable-hooks))
 
 ;; --- Cache update hooks ----------------------------------------------------
 
 (defun gnus-gnaw--refresh-all-buffers ()
-  "Re-apply overlays in active summary buffers from the refreshed cache."
+  "Re-apply overlays in active summary buffers from the refreshed cache.
+A buffer set up by `gnus-gnaw-topic' keeps its topic filter."
   (let ((reports (gnaw-reports)))
     (dolist (buf (buffer-list))
       (with-current-buffer buf
         (when (and (derived-mode-p 'gnus-summary-mode)
                    gnus-gnaw--active-reports)
-          (setq gnus-gnaw--active-reports reports)
-          (gnus-gnaw--apply-overlays reports))))))
+          (setq gnus-gnaw--active-reports
+                (if gnus-gnaw--active-topic
+                    (gnaw-filter-by-topic reports gnus-gnaw--active-topic)
+                  reports))
+          (gnus-gnaw--apply-overlays gnus-gnaw--active-reports))))))
 
 (add-hook 'gnaw-after-update-hook #'gnus-gnaw--refresh-all-buffers)
 
